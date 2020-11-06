@@ -1,13 +1,15 @@
-import { ipcRenderer } from 'electron';
-import settings from '../../shared/settings';
+import settings, { SAVED_SESSIONS, SERVER_ARGS, SESSION_SERVER_TYPE, SESSION_SERVER_PARAMS
+} from '../../shared/settings';
 import { v4 as UUID } from 'uuid';
 import url from 'url';
 import { push } from 'connected-react-router';
 import { notification } from 'antd';
-import { debounce, toPairs, union, without, keys } from 'lodash';
-import { setSessionDetails } from './Inspector';
+import { debounce, toPairs, union, without, keys, isUndefined } from 'lodash';
+import { setSessionDetails, quitSession } from './Inspector';
 import i18n from '../../configs/i18next.config.renderer';
 import CloudProviders from '../components/Session/CloudProviders';
+import { Web2Driver } from 'web2driver';
+import ky from 'ky/umd';
 
 export const NEW_SESSION_REQUESTED = 'NEW_SESSION_REQUESTED';
 export const NEW_SESSION_BEGAN = 'NEW_SESSION_BEGAN';
@@ -33,10 +35,6 @@ export const SET_SERVER = 'SET_SERVER';
 export const SESSION_LOADING = 'SESSION_LOADING';
 export const SESSION_LOADING_DONE = 'SESSION_LOADING_DONE';
 
-export const SAVED_SESSIONS = 'SAVED_SESSIONS';
-export const SESSION_SERVER_PARAMS = 'SESSION_SERVER_PARAMS';
-export const SESSION_SERVER_TYPE = 'SESSION_SERVER_TYPE';
-export const SERVER_ARGS = 'SERVER_ARGS';
 export const VISIBLE_PROVIDERS = 'VISIBLE_PROVIDERS';
 
 export const SET_ATTACH_SESS_ID = 'SET_ATTACH_SESS_ID';
@@ -54,6 +52,19 @@ export const SHOW_DESIRED_CAPS_JSON_ERROR = 'SHOW_DESIRED_CAPS_JSON_ERROR';
 export const IS_ADDING_CLOUD_PROVIDER = 'IS_ADDING_CLOUD_PROVIDER';
 
 export const SET_PROVIDERS = 'SET_PROVIDERS';
+
+
+const CAPS_NEW_COMMAND = 'appium:newCommandTimeout';
+const CAPS_CONNECT_HARDWARE_KEYBOARD = 'appium:connectHardwareKeyboard';
+const CAPS_NATIVE_WEB_SCREENSHOT = 'appium:nativeWebScreenshot';
+const CAPS_ENSURE_WEBVIEW_HAVE_PAGES = 'appium:ensureWebviewsHavePages';
+
+// Multiple requests sometimes send a new session request
+// after establishing a session.
+// This situation could happen easier on cloud vendors,
+// so let's set zero so far.
+// TODO: increase this retry when we get issues
+export const CONN_RETRIES = 0;
 
 const serverTypes = {};
 for (const key of keys(CloudProviders)) {
@@ -81,7 +92,15 @@ export function getCapsObject (caps) {
 export function showError (e, methodName, secs = 5) {
   let errMessage;
   if (e['jsonwire-error'] && e['jsonwire-error'].status === 7) {
+    // FIXME: we probably should set 'findElement' as the method name
+    // if it is also number.
+    if (methodName === 10) {
+      methodName = 'findElements';
+    }
     errMessage = i18n.t('findElementFailure', {methodName});
+    if (e.message) {
+      errMessage += ` Original error: '${e.message}'`;
+    }
   } else if (e.data) {
     try {
       e.data = JSON.parse(e.data);
@@ -163,9 +182,10 @@ export function newSession (caps, attachSessId = null) {
 
     dispatch({type: NEW_SESSION_REQUESTED, caps});
 
-    let desiredCapabilities = caps ? getCapsObject(caps) : null;
+    let desiredCapabilities = caps ? getCapsObject(caps) : {};
     let session = getState().session;
     let host, port, username, accessKey, https, path, token;
+    desiredCapabilities = addCustomCaps(desiredCapabilities);
 
     switch (session.serverType) {
       case ServerTypes.local:
@@ -185,8 +205,7 @@ export function newSession (caps, attachSessId = null) {
         https = session.server.remote.ssl;
         break;
       case ServerTypes.sauce:
-        host = session.server.sauce.dataCenter === 'eu-central-1' ?
-          'ondemand.eu-central-1.saucelabs.com' : 'ondemand.saucelabs.com';
+        host = `ondemand.${session.server.sauce.dataCenter}.saucelabs.com`;
         port = 80;
         if (session.server.sauce.useSCProxy) {
           host = session.server.sauce.scHost || 'localhost';
@@ -342,54 +361,77 @@ export function newSession (caps, attachSessId = null) {
         break;
     }
 
-    let rejectUnauthorized = !session.server.advanced.allowUnauthorized;
-    let proxy;
-    if (session.server.advanced.useProxy && session.server.advanced.proxy) {
-      proxy = session.server.advanced.proxy;
+    // TODO W2D handle proxy and rejectUnauthorized cases
+    //let rejectUnauthorized = !session.server.advanced.allowUnauthorized;
+    //let proxy;
+    //if (session.server.advanced.useProxy && session.server.advanced.proxy) {
+    //  proxy = session.server.advanced.proxy;
+    //}
+
+    dispatch({type: SESSION_LOADING});
+
+
+    const hostname = username && accessKey ? `${username}:${accessKey}@${host}` : host;
+    const serverOpts = {
+      hostname,
+      port: parseInt(port, 10),
+      protocol: https ? 'https' : 'http',
+      path,
+      connectionRetryCount: CONN_RETRIES,
+    };
+
+    // If a newCommandTimeout wasn't provided, set it to 0 so that sessions don't close on users
+    if (isUndefined(desiredCapabilities[CAPS_NEW_COMMAND])) {
+      desiredCapabilities[CAPS_NEW_COMMAND] = 0;
     }
 
-    // Start the session
-    ipcRenderer.send('appium-create-new-session', {
+    // If someone didn't specify connectHardwareKeyboard, set it to true by
+    // default
+    if (isUndefined(desiredCapabilities[CAPS_CONNECT_HARDWARE_KEYBOARD])) {
+      desiredCapabilities[CAPS_CONNECT_HARDWARE_KEYBOARD] = true;
+    }
+
+    let driver = null;
+    try {
+      if (attachSessId) {
+        driver = await Web2Driver.attachToSession(attachSessId, serverOpts);
+        driver._isAttachedSession = true;
+      } else {
+        driver = await Web2Driver.remote(serverOpts, desiredCapabilities);
+      }
+    } catch (err) {
+      showError(err, 0);
+      return;
+    } finally {
+      dispatch({type: SESSION_LOADING_DONE});
+      // Save the current server settings
+      await settings.set(SESSION_SERVER_PARAMS, session.server);
+    }
+
+    // The homepage arg in ChromeDriver is not working with Appium. iOS can have a default url, but
+    // we want to keep the process equal to prevent complexity so we launch a default url here to make
+    // sure we don't start with an empty page which will not show proper HTML in the inspector
+    const {browserName = ''} = desiredCapabilities;
+
+    if (browserName.trim() !== '') {
+      try {
+        await driver.navigateTo('http://appium.io/docs/en/about-appium/intro/');
+      } catch (ign) {}
+    }
+
+    // pass some state to the inspector that it needs to build recorder
+    // code boilerplate
+    const action = setSessionDetails(driver, {
       desiredCapabilities,
-      attachSessId,
       host,
       port,
       path,
       username,
       accessKey,
       https,
-      rejectUnauthorized,
-      proxy,
     });
-
-    dispatch({type: SESSION_LOADING});
-
-    // If it failed, show an alert saying it failed
-    ipcRenderer.once('appium-new-session-failed', (evt, e) => {
-      dispatch({type: SESSION_LOADING_DONE});
-      removeNewSessionListeners();
-      showError(e, 0);
-    });
-
-    ipcRenderer.once('appium-new-session-ready', () => {
-      dispatch({type: SESSION_LOADING_DONE});
-      // pass some state to the inspector that it needs to build recorder
-      // code boilerplate
-      setSessionDetails({
-        desiredCapabilities,
-        host,
-        port,
-        path,
-        username,
-        accessKey,
-        https,
-      })(dispatch);
-      removeNewSessionListeners();
-      dispatch(push('/inspector'));
-    });
-
-    // Save the current server settings
-    await settings.set(SESSION_SERVER_PARAMS, session.server);
+    action(dispatch);
+    dispatch(push('/inspector'));
   };
 }
 
@@ -407,7 +449,7 @@ export function saveSession (caps, params) {
       // If it's a new session, add it to the list
       uuid = UUID();
       let newSavedSession = {
-        date: +(new Date()),
+        date: Date.now(),
         name,
         uuid,
         caps,
@@ -423,7 +465,8 @@ export function saveSession (caps, params) {
       }
     }
     await settings.set(SAVED_SESSIONS, savedSessions);
-    await getSavedSessions()(dispatch);
+    const action = getSavedSessions();
+    await action(dispatch);
     dispatch({type: SET_CAPS, caps, uuid});
     dispatch({type: SAVE_SESSION_DONE});
   };
@@ -506,7 +549,8 @@ export function changeServerType (serverType) {
   return async (dispatch, getState) => {
     await settings.set(SESSION_SERVER_TYPE, serverType);
     dispatch({type: CHANGE_SERVER_TYPE, serverType});
-    getRunningSessions()(dispatch, getState);
+    const action = getRunningSessions();
+    action(dispatch, getState);
   };
 }
 
@@ -539,7 +583,8 @@ export function setLocalServerParams () {
       dispatch({type: SET_SERVER_PARAM, serverType: ServerTypes.local, name: 'port', value: undefined});
       dispatch({type: SET_SERVER_PARAM, serverType: ServerTypes.local, name: 'hostname', value: undefined});
       if (getState().session.serverType === 'local') {
-        await changeServerType('remote')(dispatch, getState);
+        const action = changeServerType('remote');
+        await action(dispatch, getState);
       }
     }
   };
@@ -568,7 +613,7 @@ export function setSavedServerParams () {
 }
 
 export function getRunningSessions () {
-  return (dispatch, getState) => {
+  return async (dispatch, getState) => {
     const avoidServerTypes = [
       'sauce', 'testobject'
     ];
@@ -580,19 +625,17 @@ export function getRunningSessions () {
     dispatch({type: GET_SESSIONS_REQUESTED});
     if (avoidServerTypes.includes(serverType)) {
       dispatch({type: GET_SESSIONS_DONE});
-    } else {
-      ipcRenderer.send('appium-client-get-sessions', {
-        host: serverInfo.hostname, port: serverInfo.port, path: serverInfo.path, ssl: serverInfo.ssl
-      });
-      ipcRenderer.once('appium-client-get-sessions-response', (evt, e) => {
-        const res = JSON.parse(e.res);
-        dispatch({type: GET_SESSIONS_DONE, sessions: res.value});
-        removeRunningSessionsListeners();
-      });
-      ipcRenderer.once('appium-client-get-sessions-fail', () => {
-        dispatch({type: GET_SESSIONS_DONE});
-        removeRunningSessionsListeners();
-      });
+      return;
+    }
+
+    const {hostname, port, path, ssl} = serverInfo;
+    try {
+      const adjPath = path.endsWith('/') ? path : `${path}/`;
+      const res = await ky(`http${ssl ? 's' : ''}://${hostname}:${port}${adjPath}sessions`).json();
+      dispatch({type: GET_SESSIONS_DONE, sessions: res.value});
+    } catch (err) {
+      console.warn(`Ignoring error in getting list of active sessions: ${err}`); // eslint-disable-line no-console
+      dispatch({type: GET_SESSIONS_DONE});
     }
   };
 }
@@ -663,16 +706,6 @@ export function setRawDesiredCaps (rawDesiredCaps) {
   };
 }
 
-function removeNewSessionListeners () {
-  ipcRenderer.removeAllListeners('appium-new-session-failed');
-  ipcRenderer.removeAllListeners('appium-new-session-ready');
-}
-
-function removeRunningSessionsListeners () {
-  ipcRenderer.removeAllListeners('appium-client-get-sessions-fail');
-  ipcRenderer.removeAllListeners('appium-client-get-sessions-response');
-}
-
 export function addCloudProvider () {
   return (dispatch) => {
     dispatch({type: IS_ADDING_CLOUD_PROVIDER, isAddingProvider: true});
@@ -707,5 +740,55 @@ export function setVisibleProviders () {
   return async (dispatch) => {
     const providers = await settings.get(VISIBLE_PROVIDERS);
     dispatch({type: SET_PROVIDERS, providers});
+  };
+}
+
+/**
+ * Add custom capabilities
+ *
+ * @param {object} caps
+ */
+function addCustomCaps (caps) {
+  const {browserName = '', platformName = ''} = caps;
+  const safariCustomCaps = {
+    // Add the includeSafariInWebviews for future HTML detection
+    includeSafariInWebviews: true,
+  };
+  const chromeCustomCaps = {};
+  // Make sure the screenshot is taken of the whole screen when the ChromeDriver is used
+  chromeCustomCaps[CAPS_NATIVE_WEB_SCREENSHOT] = true;
+
+  const androidCustomCaps = {};
+  // @TODO: remove when this is defaulted in the newest Appium 1.8.x release
+  androidCustomCaps[CAPS_ENSURE_WEBVIEW_HAVE_PAGES] = true;
+
+  const iosCustomCaps = {};
+
+  return {
+    ...caps,
+    ...(browserName.toLowerCase() === 'safari' ? safariCustomCaps : {}),
+    ...(browserName.toLowerCase() === 'chrome' ? chromeCustomCaps : {}),
+    ...(platformName.toLowerCase() === 'android' ? androidCustomCaps : {}),
+    ...(platformName.toLowerCase() === 'ios' ? iosCustomCaps : {}),
+  };
+}
+
+export function bindWindowClose () {
+  return (dispatch, getState) => {
+    window.addEventListener('beforeunload', async (evt) => {
+      let {driver} = getState().inspector;
+      if (driver) {
+        try {
+          const action = quitSession('Window closed');
+          await action(dispatch, getState);
+        } finally {
+          driver = null;
+        }
+      }
+
+      // to allow the window close to continue, the thing we must do is make sure the event no
+      // longer has any 'returnValue' property
+      delete evt.returnValue;
+    });
   };
 }

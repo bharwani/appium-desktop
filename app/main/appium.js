@@ -4,12 +4,9 @@ import { ipcMain, app } from 'electron';
 import { main as appiumServer } from 'appium';
 import { getDefaultArgs } from 'appium/build/lib/parser';
 import path from 'path';
-import wd from 'wd';
 import { fs, tempDir } from 'appium-support';
 import _ from 'lodash';
 import settings from '../shared/settings';
-import {createSession, killSession, getSessionHandler} from './appium-method-handler';
-import request from 'request-promise';
 import { checkNewUpdates } from './auto-updater';
 import { openBrowserWindow, setSavedEnv } from './helpers';
 
@@ -131,9 +128,9 @@ function connectGetDefaultArgs () {
 /**
  * Opens a new window for creating new sessions
  */
-function connectCreateNewSessionWindow (win) {
+function connectCreateNewSessionWindow () {
   ipcMain.on('create-new-session-window', () => {
-    createNewSessionWindow(win);
+    createNewSessionWindow();
   });
 }
 
@@ -143,201 +140,15 @@ function connectClearLogFile () {
   });
 }
 
-export function createNewSessionWindow (win) {
+export function createNewSessionWindow () {
   let sessionWin = openBrowserWindow('session', {
     title: 'Start Session',
     titleBarStyle: 'hidden',
   });
 
-  // When you close the session window, kill its associated Appium session (if there is one)
-  let sessionID = sessionWin.webContents.id;
   sessionWin.on('closed', () => {
-    killSession(sessionID);
     sessionWin = null;
   });
-
-  // When the main window is closed, close the session window too
-  win.once('closed', () => {
-    sessionWin.close();
-  });
-}
-
-function connectCreateNewSession () {
-  ipcMain.on('appium-create-new-session', async (event, args) => {
-    const {desiredCapabilities, host, port, path, username, accessKey, https,
-           attachSessId, rejectUnauthorized, proxy} = args;
-
-    try {
-      // If there is an already active session, kill it. Limit one session per window.
-      const windowId = event.sender.id;
-      if (getSessionHandler(windowId)) {
-        killSession(windowId);
-      }
-
-      // Create the driver and cache it by the sender ID
-      let driver = wd.promiseChainRemote({
-        hostname: host,
-        port,
-        path,
-        username,
-        accessKey,
-        https,
-      });
-      driver.configureHttp({rejectUnauthorized, proxy});
-      const handler = createSession(driver, event.sender, windowId);
-
-
-      // If we're just attaching to an existing session, do that and
-      // short-circuit the rest of the logic
-      if (attachSessId) {
-        driver._isAttachedSession = true;
-        await driver.attach(attachSessId);
-        // get the session capabilities to prove things are working
-        await driver.sessionCapabilities();
-        event.sender.send('appium-new-session-ready');
-        return;
-      }
-
-      // If a newCommandTimeout wasn't provided, set it to 0 so that sessions don't close on users
-      if (!desiredCapabilities.newCommandTimeout) {
-        desiredCapabilities.newCommandTimeout = 0;
-      }
-
-      // If someone didn't specify connectHardwareKeyboard, set it to true by
-      // default
-      if (typeof desiredCapabilities.connectHardwareKeyboard === 'undefined') {
-        desiredCapabilities.connectHardwareKeyboard = true;
-      }
-
-      // Prevent wd from injecting default desired capabilities
-      if (typeof desiredCapabilities.wdNoDefaults === 'undefined' &&
-          typeof desiredCapabilities['wd-no-defaults'] === 'undefined') {
-        desiredCapabilities.wdNoDefaults = true;
-      }
-
-      // Try initializing it. If it fails, kill it and send error message to sender
-      let p = driver.init(desiredCapabilities);
-      event.sender.send('appium-new-session-successful');
-      await p;
-
-      if (host !== '127.0.0.1' && host !== 'localhost') {
-        handler.runKeepAliveLoop();
-      }
-
-
-      // we don't really support the web portion of apps for a number of
-      // reasons, so pre-emptively ensure we're in native mode before doing the
-      // rest of the inspector startup. Since some platforms might not implement
-      // contexts, ignore any failures here.
-      try {
-        await driver.context('NATIVE_APP');
-      } catch (ign) {}
-      event.sender.send('appium-new-session-ready');
-    } catch (e) {
-      // If the session failed, delete it from the cache
-      killSession(event.sender.id);
-      event.sender.send('appium-new-session-failed', e);
-    }
-  });
-}
-
-function connectRestartRecorder () {
-  ipcMain.on('appium-restart-recorder', (evt) => {
-    getSessionHandler(evt.sender.id).restart();
-  });
-}
-
-function connectKeepAlive () {
-  ipcMain.on('appium-keep-session-alive', (evt) => {
-    getSessionHandler(evt.sender.id).keepSessionAlive();
-  });
-}
-
-/**
- * When a Session Window makes method request, find it's corresponding driver, execute requested method
- * and send back the result
- */
-function connectClientMethodListener () {
-  ipcMain.on('appium-client-command-request', async (evt, data) => {
-    const {
-      uuid, // Transaction ID
-      methodName, // Optional. Name of method being provided
-      strategy, // Optional. Element locator strategy
-      selector, // Optional. Element fetch selector
-      fetchArray = false, // Optional. Are we fetching an array of elements or just one?
-      elementId, // Optional. Element being operated on
-      args = [], // Optional. Arguments passed to method
-      skipScreenshotAndSource = false, // Optional. Do we want the updated source and screenshot?
-      ignoreResult = false, // Optional. Do we want to send the result back to the renderer?
-    } = data;
-
-    let renderer = evt.sender;
-    let methodHandler = getSessionHandler(renderer.id);
-
-    try {
-      if (methodName === 'quit') {
-        killSession(renderer.id, true);
-        // when we've quit the session, there's no source/screenshot to send
-        // back
-        renderer.send('appium-client-command-response', {
-          source: null,
-          screenshot: null,
-          windowSize: null,
-          uuid,
-          result: null
-        });
-      } else {
-        let res = {};
-        if (methodName) {
-          if (elementId) {
-            console.log(`Handling client method request with method '${methodName}', args ${JSON.stringify(args)} and elementId ${elementId}`);
-            res = await methodHandler.executeElementCommand(elementId, methodName, args, skipScreenshotAndSource);
-          } else {
-            console.log(`Handling client method request with method '${methodName}' and args ${JSON.stringify(args)}`);
-            res = await methodHandler.executeMethod(methodName, args, skipScreenshotAndSource);
-          }
-        } else if (strategy && selector) {
-          if (fetchArray) {
-            console.log(`Fetching elements with selector '${selector}' and strategy ${strategy}`);
-            res = await methodHandler.fetchElements(strategy, selector, skipScreenshotAndSource);
-          } else {
-            console.log(`Fetching an element with selector '${selector}' and strategy ${strategy}`);
-            res = await methodHandler.fetchElement(strategy, selector);
-          }
-        }
-
-        renderer.send('appium-client-command-response', {
-          ...res,
-          methodName,
-          ignoreResult,
-          uuid,
-        });
-      }
-
-    } catch (e) {
-      // If the status is '6' that means the session has been terminated
-      if (e.status === 6) {
-        console.log('Session terminated: e.status === 6');
-        renderer.send('appium-session-done', e);
-      }
-      console.log('Caught an exception: ', e);
-      renderer.send('appium-client-command-response-error', {e: JSON.stringify(e), uuid});
-    }
-  });
-}
-
-const getCurrentSessions = _.debounce(async (evt, data) => {
-  const {host, port, path: appiumPath = '/wd/hub', ssl} = data;
-  try {
-    const res = await request(`http${ssl ? 's' : ''}://${host}:${port}${appiumPath}/sessions`);
-    evt.sender.send('appium-client-get-sessions-response', {res});
-  } catch (e) {
-    evt.sender.send('appium-client-get-sessions-fail');
-  }
-}, 2000);
-
-function connectGetSessionsListener () {
-  ipcMain.on('appium-client-get-sessions', getCurrentSessions);
 }
 
 function connectMoveToApplicationsFolder () {
@@ -394,14 +205,9 @@ export function initializeIpc (win) {
   // listen for 'stop-server' from the renderer
   connectStopServer(win);
   // listen for 'create-new-session-window' from the renderer
-  connectCreateNewSessionWindow(win);
+  connectCreateNewSessionWindow();
   connectGetDefaultArgs();
-  connectCreateNewSession(win);
-  connectClientMethodListener(win);
-  connectGetSessionsListener();
-  connectRestartRecorder();
   connectMoveToApplicationsFolder();
-  connectKeepAlive();
   connectClearLogFile();
   connectOpenConfig(win);
   connectGetEnv();

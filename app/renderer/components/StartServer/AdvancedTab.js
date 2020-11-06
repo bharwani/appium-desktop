@@ -1,5 +1,5 @@
 import React, { Component } from 'react';
-import { Modal, Input, Checkbox, notification } from 'antd';
+import {Modal, Input, Checkbox, notification, Tooltip} from 'antd';
 
 import { withTranslation } from '../../util';
 import { propTypes, updateArg } from './shared';
@@ -15,7 +15,7 @@ import { INPUT } from '../AntdTypes';
 // defaultDevice, automationTraceTemplatePath, instrumentsPath,
 // nodeconfig, robotAddress, robotPort, selendroidPort,
 // chromeDriverPort, chromedriverExecutable, enforceStrictCaps,
-// isolateSimDevice, tmpDir, traceDir, debugLogSpacing,
+// isolateSimDevice, tmpDir, traceDir, debugLogSpacing, allowCors,
 // suppressAdbKillServer, webkitDebugProxyPort, defaultCapabilities
 
 class AdvancedTab extends Component {
@@ -148,7 +148,10 @@ class AdvancedTab extends Component {
               {this.buildInput('logTimestamp', 'checkbox', t('Log Timestamps'))}
               {this.buildInput('logNoColors', 'checkbox', t('Suppress Log Color'))}
               {this.buildInput('enforceStrictCaps', 'checkbox', t('Strict Caps Mode'))}
-              {this.buildInput('relaxedSecurityEnabled', 'checkbox', t('Relaxed Security'))}
+              <Tooltip title={t('relaxedSecurityInfo')}>
+                {this.buildInput('relaxedSecurityEnabled', 'checkbox', t('Relaxed Security'))}
+              </Tooltip>
+              {this.buildInput('allowCors', 'checkbox', t('Allow CORS'))}
               {this.buildInput('defaultCapabilities', 'textarea', t('Default Capabilities'))}
             </div>
 

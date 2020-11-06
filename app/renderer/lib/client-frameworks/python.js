@@ -14,9 +14,7 @@ class PythonFramework extends Framework {
   }
 
   wrapWithBoilerplate (code) {
-    let capStr = Object.keys(this.caps).map((k) => {
-      return `caps[${JSON.stringify(k)}] = ${this.getPythonVal(this.caps[k])}`;
-    }).join('\n');
+    let capStr = Object.keys(this.caps).map((k) => `caps[${JSON.stringify(k)}] = ${this.getPythonVal(this.caps[k])}`).join('\n');
     return `# This sample code uses the Appium python client
 # pip install Appium-Python-Client
 # Then you can paste this into a file and simply run with Python
@@ -30,6 +28,10 @@ driver = webdriver.Remote("${this.serverUrl}", caps)
 
 ${code}
 driver.quit()`;
+  }
+
+  codeFor_executeScript (/*varNameIgnore, varIndexIgnore, args*/) {
+    return `# TODO implement executeScript`;
   }
 
   codeFor_findAndAssign (strategy, locator, localVar, isArray) {
@@ -92,11 +94,11 @@ driver.quit()`;
     return `package_name = driver.current_package`;
   }
 
-  codeFor_installAppOnDevice (varNameIgnore, varIndexIgnore, app) {
+  codeFor_installApp (varNameIgnore, varIndexIgnore, app) {
     return `driver.install_app('${app}');`;
   }
 
-  codeFor_isAppInstalledOnDevice (varNameIgnore, varIndexIgnore, app) {
+  codeFor_isAppInstalled (varNameIgnore, varIndexIgnore, app) {
     return `is_app_installed = driver.isAppInstalled("${app}");`;
   }
 
@@ -104,7 +106,7 @@ driver.quit()`;
     return `driver.launch_app()`;
   }
 
-  codeFor_backgroundApp (varNameIgnore, varIndexIgnore, timeout) {
+  codeFor_background (varNameIgnore, varIndexIgnore, timeout) {
     return `driver.background_app(${timeout})`;
   }
 
@@ -112,15 +114,15 @@ driver.quit()`;
     return `driver.close_app()`;
   }
 
-  codeFor_resetApp () {
+  codeFor_reset () {
     return `driver.reset()`;
   }
 
-  codeFor_removeAppFromDevice (varNameIgnore, varIndexIgnore, app) {
+  codeFor_removeApp (varNameIgnore, varIndexIgnore, app) {
     return `driver.remove_app('${app}');`;
   }
 
-  codeFor_getAppStrings (varNameIgnore, varIndexIgnore, language, stringFile) {
+  codeFor_getStrings (varNameIgnore, varIndexIgnore, language, stringFile) {
     return `appStrings = driver.app_strings(${language ? `${language}, ` : ''}${stringFile ? `"${stringFile}` : ''})`;
   }
 
@@ -132,15 +134,15 @@ driver.quit()`;
     return `driver.set_clipboard_text('${clipboardText}')`;
   }
 
-  codeFor_pressKeycode (varNameIgnore, varIndexIgnore, keyCode, metaState, flags) {
+  codeFor_pressKeyCode (varNameIgnore, varIndexIgnore, keyCode, metaState, flags) {
     return `driver.press_keycode(${keyCode}, ${metaState}, ${flags});`;
   }
 
-  codeFor_longPressKeycode (varNameIgnore, varIndexIgnore, keyCode, metaState, flags) {
+  codeFor_longPressKeyCode (varNameIgnore, varIndexIgnore, keyCode, metaState, flags) {
     return `driver.long_press_keycode(${keyCode}, ${metaState}, ${flags});`;
   }
 
-  codeFor_hideDeviceKeyboard () {
+  codeFor_hideKeyboard () {
     return `driver.hide_keyboard()`;
   }
 
@@ -148,7 +150,7 @@ driver.quit()`;
     return `# isKeyboardShown not supported`;
   }
 
-  codeFor_pushFileToDevice (varNameIgnore, varIndexIgnore, pathToInstallTo, fileContentString) {
+  codeFor_pushFile (varNameIgnore, varIndexIgnore, pathToInstallTo, fileContentString) {
     return `driver.push_file('${pathToInstallTo}', '${fileContentString}');`;
   }
 
@@ -216,15 +218,15 @@ driver.quit()`;
     return `# Not supported: getPerformanceData`;
   }
 
-  codeFor_getSupportedPerformanceDataTypes () {
-    return `# Not supported: getSupportedPerformanceDataTypes`;
+  codeFor_getPerformanceDataTypes () {
+    return `# Not supported: getPerformanceDataTypes`;
   }
 
-  codeFor_performTouchId (varNameIgnore, varIndexIgnore, match) {
+  codeFor_touchId (varNameIgnore, varIndexIgnore, match) {
     return `driver.touch_id(${match})`;
   }
 
-  codeFor_toggleTouchIdEnrollment (varNameIgnore, varIndexIgnore, enroll) {
+  codeFor_toggleEnrollTouchId (varNameIgnore, varIndexIgnore, enroll) {
     return `driver.toggle_touch_id_enrollment(${enroll})`;
   }
 
@@ -240,20 +242,12 @@ driver.quit()`;
     return `driver.finger_print(${fingerprintId})`;
   }
 
-  codeFor_sessionCapabilities () {
+  codeFor_getSession () {
     return `desired_caps = self.driver.desired_capabilities()`;
   }
 
-  codeFor_setPageLoadTimeout (varNameIgnore, varIndexIgnore, ms) {
-    return `driver.set_page_load_timeout(${ms})`;
-  }
-
-  codeFor_setAsyncScriptTimeout (varNameIgnore, varIndexIgnore, ms) {
-    return `driver.timeouts('script', ${ms})`;
-  }
-
-  codeFor_setImplicitWaitTimeout (varNameIgnore, varIndexIgnore, ms) {
-    return `driver.timeouts('implicit', ${ms})`;
+  codeFor_setTimeouts (/*varNameIgnore, varIndexIgnore, timeoutsJson*/) {
+    return '# TODO implement setTimeouts';
   }
 
   codeFor_getOrientation () {
@@ -272,11 +266,11 @@ driver.quit()`;
     return `driver.set_location(${latitude}, ${longitude}, ${altitude})`;
   }
 
-  codeFor_logTypes () {
+  codeFor_getLogTypes () {
     return `log_types = driver.log_types();`;
   }
 
-  codeFor_log (varNameIgnore, varIndexIgnore, logType) {
+  codeFor_getLogs (varNameIgnore, varIndexIgnore, logType) {
     return `logs = driver.get_log('${logType}');`;
   }
 
@@ -284,17 +278,17 @@ driver.quit()`;
     return `driver.update_settings(${settingsJson}))`;
   }
 
-  codeFor_settings () {
+  codeFor_getSettings () {
     return `settings = driver.get_settings`;
   }
 
   // Web
 
-  codeFor_get (url) {
+  codeFor_navigateTo (url) {
     return `driver.get('${url}')`;
   }
 
-  codeFor_url () {
+  codeFor_getUrl () {
     return `current_url = driver.current_url`;
   }
 
@@ -308,15 +302,15 @@ driver.quit()`;
 
   // Context
 
-  codeFor_currentContext () {
+  codeFor_getContext () {
     return `driver.current_context`;
   }
 
-  codeFor_contexts () {
+  codeFor_getContexts () {
     return `driver.contexts()`;
   }
 
-  codeFor_context (name) {
+  codeFor_switchContexts (name) {
     return `driver.switch_to.context('${name}')`;
   }
 }

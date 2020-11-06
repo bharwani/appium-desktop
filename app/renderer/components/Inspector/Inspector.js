@@ -1,6 +1,6 @@
 import React, { Component } from 'react';
 import { debounce } from 'lodash';
-import { SCREENSHOT_INTERACTION_MODE, INTERACTION_MODE } from './shared';
+import { SCREENSHOT_INTERACTION_MODE, INTERACTION_MODE, APP_MODE } from './shared';
 import { Card, Button, Spin, Tooltip, Modal, Tabs } from 'antd';
 import Screenshot from './Screenshot';
 import SelectedElement from './SelectedElement';
@@ -22,11 +22,11 @@ import {
   CloseOutlined,
   FileTextOutlined,
   TagOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  AppstoreOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { BUTTON } from '../AntdTypes';
-
-
 
 const {SELECT, SWIPE, TAP} = SCREENSHOT_INTERACTION_MODE;
 
@@ -90,9 +90,9 @@ export default class Inspector extends Component {
       window.resizeTo(newWidth, newHeight);
     }
     this.didInitialResize = true;
-    this.props.bindAppium();
-    this.props.applyClientMethod({methodName: 'source'});
+    this.props.applyClientMethod({methodName: 'getPageSource', ignoreResult: true});
     this.props.getSavedActionFramework();
+    this.props.runKeepAliveLoop();
     window.addEventListener('resize', this.updateSourceTreeWidth);
   }
 
@@ -115,9 +115,9 @@ export default class Inspector extends Component {
   render () {
     const {screenshot, screenshotError, selectedElement = {},
            applyClientMethod, quitSession, isRecording, showRecord, startRecording,
-           pauseRecording, showLocatorTestModal,
-           screenshotInteractionMode,
-           selectedInteractionMode, selectInteractionMode,
+           pauseRecording, showLocatorTestModal, appMode,
+           screenshotInteractionMode, isFindingElementsTimes,
+           selectedInteractionMode, selectInteractionMode, selectAppMode,
            showKeepAlivePrompt, keepSessionAlive, sourceXML, t} = this.props;
     const {path} = selectedElement;
 
@@ -166,6 +166,21 @@ export default class Inspector extends Component {
       </div>
     </div>;
 
+    const appModeControls = <div className={InspectorStyles['action-controls']}>
+      <ButtonGroup size="large" value={appMode}>
+        <Tooltip title={t('Native App Mode')}>
+          <Button icon={<AppstoreOutlined/>} onClick={() => {selectAppMode(APP_MODE.NATIVE);}}
+            type={appMode === APP_MODE.NATIVE ? BUTTON.PRIMARY : BUTTON.DEFAULT}
+          />
+        </Tooltip>
+        <Tooltip title={t('Web/Hybrid App Mode')}>
+          <Button icon={<GlobalOutlined/>} onClick={() => {selectAppMode(APP_MODE.WEB_HYBRID);}}
+            type={appMode === APP_MODE.WEB_HYBRID ? BUTTON.PRIMARY : BUTTON.DEFAULT}
+          />
+        </Tooltip>
+      </ButtonGroup>
+    </div>;
+
     let actionControls = <div className={InspectorStyles['action-controls']}>
       <ButtonGroup size="large" value={screenshotInteractionMode}>
         <Tooltip title={t('Select Elements')}>
@@ -186,50 +201,55 @@ export default class Inspector extends Component {
       </ButtonGroup>
     </div>;
 
+    const generalControls = <ButtonGroup size="large">
+      <Tooltip title={t('Back')}>
+        <Button id='btnGoBack' icon={<ArrowLeftOutlined/>} onClick={() => applyClientMethod({methodName: 'back'})}/>
+      </Tooltip>
+      <Tooltip title={t('refreshSource')}>
+        <Button id='btnReload' icon={<ReloadOutlined/>} onClick={() => applyClientMethod({methodName: 'getPageSource'})}/>
+      </Tooltip>
+      {!isRecording &&
+        <Tooltip title={t('Start Recording')}>
+          <Button id='btnStartRecording' icon={<EyeOutlined/>} onClick={startRecording}/>
+        </Tooltip>
+      }
+      {isRecording &&
+        <Tooltip title={t('Pause Recording')}>
+          <Button id='btnPause' icon={<PauseOutlined/>} type={BUTTON.DANGER} onClick={pauseRecording}/>
+        </Tooltip>
+      }
+      <Tooltip title={t('Search for element')}>
+        <Button id='searchForElement' icon={<SearchOutlined/>} onClick={showLocatorTestModal}/>
+      </Tooltip>
+      <Tooltip title={t('Copy XML Source to Clipboard')}>
+        <Button id='btnSourceXML' icon={<CopyOutlined/>} onClick={() => clipboard.writeText(sourceXML)}/>
+      </Tooltip>
+      <Tooltip title={t('quitSessionAndClose')}>
+        <Button id='btnClose' icon={<CloseOutlined/>} onClick={() => quitSession()}/>
+      </Tooltip>
+    </ButtonGroup>;
+
     let controls = <div className={InspectorStyles['inspector-toolbar']}>
+      {appModeControls}
       {actionControls}
-      <ButtonGroup size="large">
-        <Tooltip title={t('Back')}>
-          <Button id='btnGoBack' icon={<ArrowLeftOutlined/>} onClick={() => applyClientMethod({methodName: 'back'})}/>
-        </Tooltip>
-        <Tooltip title={t('refreshSource')}>
-          <Button id='btnReload' icon={<ReloadOutlined/>} onClick={() => applyClientMethod({methodName: 'source'})}/>
-        </Tooltip>
-        {!isRecording &&
-          <Tooltip title={t('Start Recording')}>
-            <Button id='btnStartRecording' icon={<EyeOutlined/>} onClick={startRecording}/>
-          </Tooltip>
-        }
-        {isRecording &&
-          <Tooltip title={t('Pause Recording')}>
-            <Button id='btnPause' icon={<PauseOutlined/>} type={BUTTON.DANGER} onClick={pauseRecording}/>
-          </Tooltip>
-        }
-        <Tooltip title={t('Search for element')}>
-          <Button id='searchForElement' icon={<SearchOutlined/>} onClick={showLocatorTestModal}/>
-        </Tooltip>
-        <Tooltip title={t('Copy XML Source to Clipboard')}>
-          <Button id='btnSourceXML' icon={<CopyOutlined/>} onClick={() => clipboard.writeText(sourceXML)}/>
-        </Tooltip>
-        <Tooltip title={t('quitSessionAndClose')}>
-          <Button id='btnClose' icon={<CloseOutlined/>} onClick={() => quitSession()}/>
-        </Tooltip>
-      </ButtonGroup>
+      {generalControls}
     </div>;
 
-    return <div className={InspectorStyles['inspector-container']}>
-      {controls}
-      {main}
-      <Modal
-        title={t('Session Inactive')}
-        visible={showKeepAlivePrompt}
-        onOk={() => keepSessionAlive()}
-        onCancel={() => quitSession()}
-        okText={t('Keep Session Running')}
-        cancelText={t('Quit Session')}
-      >
-        <p>{t('Your session is about to expire')}</p>
-      </Modal>
-    </div>;
+    return (<Spin spinning={isFindingElementsTimes} key="main">
+      <div className={InspectorStyles['inspector-container']}>
+        {controls}
+        {main}
+        <Modal
+          title={t('Session Inactive')}
+          visible={showKeepAlivePrompt}
+          onOk={() => keepSessionAlive()}
+          onCancel={() => quitSession()}
+          okText={t('Keep Session Running')}
+          cancelText={t('Quit Session')}
+        >
+          <p>{t('Your session is about to expire')}</p>
+        </Modal>
+      </div>
+    </Spin>);
   }
 }

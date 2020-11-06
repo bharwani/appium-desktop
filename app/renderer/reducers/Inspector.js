@@ -1,5 +1,4 @@
 import { omit } from 'lodash';
-
 import { SET_SOURCE_AND_SCREENSHOT, QUIT_SESSION_REQUESTED, QUIT_SESSION_DONE,
          SESSION_DONE, SELECT_ELEMENT, UNSELECT_ELEMENT, SELECT_HOVERED_ELEMENT, SET_SELECTED_ELEMENT_ID, SET_INTERACTIONS_NOT_AVAILABLE,
          UNSELECT_HOVERED_ELEMENT, METHOD_CALL_REQUESTED, METHOD_CALL_DONE,
@@ -10,15 +9,21 @@ import { SET_SOURCE_AND_SCREENSHOT, QUIT_SESSION_REQUESTED, QUIT_SESSION_DONE,
          SEARCHING_FOR_ELEMENTS, SEARCHING_FOR_ELEMENTS_COMPLETED, SET_LOCATOR_TEST_ELEMENT, CLEAR_SEARCH_RESULTS,
          ADD_ASSIGNED_VAR_CACHE, CLEAR_ASSIGNED_VAR_CACHE, SET_SCREENSHOT_INTERACTION_MODE,
          SET_SWIPE_START, SET_SWIPE_END, CLEAR_SWIPE_ACTION, SET_SEARCHED_FOR_ELEMENT_BOUNDS, CLEAR_SEARCHED_FOR_ELEMENT_BOUNDS,
-         PROMPT_KEEP_ALIVE, HIDE_PROMPT_KEEP_ALIVE,
-         SELECT_ACTION_GROUP, SELECT_SUB_ACTION_GROUP,
-         SELECT_INTERACTION_MODE, ENTERING_ACTION_ARGS, SET_ACTION_ARG, REMOVE_ACTION
+         PROMPT_KEEP_ALIVE, HIDE_PROMPT_KEEP_ALIVE, GET_FIND_ELEMENTS_TIMES, GET_FIND_ELEMENTS_TIMES_COMPLETED,
+         SELECT_ACTION_GROUP, SELECT_SUB_ACTION_GROUP, SET_APP_MODE,
+         SELECT_INTERACTION_MODE, ENTERING_ACTION_ARGS, SET_ACTION_ARG, REMOVE_ACTION, SET_CONTEXT,
+         SET_KEEP_ALIVE_INTERVAL, SET_USER_WAIT_TIMEOUT, SET_LAST_ACTIVE_MOMENT,
 } from '../actions/Inspector';
-import { SCREENSHOT_INTERACTION_MODE, INTERACTION_MODE } from '../components/Inspector/shared';
+import { SCREENSHOT_INTERACTION_MODE, INTERACTION_MODE, APP_MODE } from '../components/Inspector/shared';
 
 const DEFAULT_FRAMEWORK = 'java';
 
 const INITIAL_STATE = {
+  driver: null,
+  keepAliveInterval: null,
+  showKeepAlivePrompt: false,
+  userWaitTimeout: null,
+  lastActiveMoment: null,
   expandedPaths: ['0'],
   isRecording: false,
   showRecord: false,
@@ -33,11 +38,13 @@ const INITIAL_STATE = {
   assignedVarCache: {},
   screenshotInteractionMode: SCREENSHOT_INTERACTION_MODE.SELECT,
   searchedForElementBounds: null,
-  showKeepAlivePrompt: false,
   selectedActionGroup: null,
   selectedSubActionGroup: null,
   selectedInteractionMode: INTERACTION_MODE.SOURCE,
+  appMode: APP_MODE.NATIVE,
   pendingAction: null,
+  findElementsExecutionTimes: [],
+  isFindingElementsTimes: false,
 };
 
 /**
@@ -56,6 +63,10 @@ export default function inspector (state = INITIAL_STATE, action) {
     case SET_SOURCE_AND_SCREENSHOT:
       return {
         ...state,
+        contexts: action.contexts,
+        contextsError: action.contextsError,
+        currentContext: action.currentContext,
+        currentContextError: action.currentContextError,
         source: action.source,
         sourceXML: action.sourceXML,
         sourceError: action.sourceError,
@@ -63,6 +74,7 @@ export default function inspector (state = INITIAL_STATE, action) {
         screenshotError: action.screenshotError,
         windowSize: action.windowSize,
         windowSizeError: action.windowSizeError,
+        findElementsExecutionTimes: [],
       };
 
     case QUIT_SESSION_REQUESTED:
@@ -90,6 +102,7 @@ export default function inspector (state = INITIAL_STATE, action) {
         selectedElement: findElementByPath(action.path, state.source),
         selectedElementPath: action.path,
         elementInteractionsNotAvailable: false,
+        findElementsExecutionTimes: [],
       };
 
     case UNSELECT_ELEMENT:
@@ -108,6 +121,7 @@ export default function inspector (state = INITIAL_STATE, action) {
         selectedElementId: action.elementId,
         selectedElementVariableName: action.variableName,
         selectedElementVariableType: action.variableType,
+        findElementsExecutionTimes: [],
       };
 
     case SET_INTERACTIONS_NOT_AVAILABLE:
@@ -147,6 +161,7 @@ export default function inspector (state = INITIAL_STATE, action) {
       return {
         ...state,
         expandedPaths: action.paths,
+        findElementsExecutionTimes: [],
       };
 
     case SHOW_SEND_KEYS_MODAL:
@@ -225,7 +240,7 @@ export default function inspector (state = INITIAL_STATE, action) {
       return {...state, showBoilerplate: action.show};
 
     case SET_SESSION_DETAILS:
-      return {...state, sessionDetails: action.sessionDetails};
+      return {...state, sessionDetails: action.sessionDetails, driver: action.driver};
 
     case SHOW_LOCATOR_TEST_MODAL:
       return {
@@ -264,6 +279,19 @@ export default function inspector (state = INITIAL_STATE, action) {
         ...state,
         locatedElements: action.elements,
         isSearchingForElements: false,
+      };
+
+    case GET_FIND_ELEMENTS_TIMES:
+      return {
+        ...state,
+        isFindingElementsTimes: true,
+      };
+
+    case GET_FIND_ELEMENTS_TIMES_COMPLETED:
+      return {
+        ...state,
+        findElementsExecutionTimes: action.findElementsExecutionTimes,
+        isFindingElementsTimes: false,
       };
 
     case SET_LOCATOR_TEST_ELEMENT:
@@ -354,6 +382,12 @@ export default function inspector (state = INITIAL_STATE, action) {
         selectedInteractionMode: action.interaction,
       };
 
+    case SET_APP_MODE:
+      return {
+        ...state,
+        appMode: action.mode,
+      };
+
     case ENTERING_ACTION_ARGS:
       return {
         ...state,
@@ -377,6 +411,30 @@ export default function inspector (state = INITIAL_STATE, action) {
       return {
         ...state,
         pendingAction: null,
+      };
+
+    case SET_CONTEXT:
+      return {
+        ...state,
+        currentContext: action.context
+      };
+
+    case SET_KEEP_ALIVE_INTERVAL:
+      return {
+        ...state,
+        keepAliveInterval: action.keepAliveInterval,
+      };
+
+    case SET_USER_WAIT_TIMEOUT:
+      return {
+        ...state,
+        userWaitTimeout: null,
+      };
+
+    case SET_LAST_ACTIVE_MOMENT:
+      return {
+        ...state,
+        lastActiveMoment: action.lastActiveMoment,
       };
 
     default:

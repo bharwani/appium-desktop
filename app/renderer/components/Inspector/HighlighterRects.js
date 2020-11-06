@@ -81,7 +81,7 @@ export default class HighlighterRects extends Component {
   async handleDoSwipe () {
     const {swipeStart, swipeEnd, clearSwipeAction, applyClientMethod} = this.props;
     await applyClientMethod({
-      methodName: 'swipe',
+      methodName: SWIPE,
       args: [swipeStart.x, swipeStart.y, swipeEnd.x, swipeEnd.y],
     });
     clearSwipeAction();
@@ -123,8 +123,10 @@ export default class HighlighterRects extends Component {
         xOffset={highlighterXOffset}
       />);
 
-      for (let childEl of element.children) {
-        recursive(childEl, zIndex + 1);
+      if (element.children) {
+        for (let childEl of element.children) {
+          recursive(childEl, zIndex + 1);
+        }
       }
     };
 
